@@ -22,11 +22,9 @@ Here are some of the resources I used and would recommend to follow along.
 ### Networking
 
 - [Beej's Guide to Network Programming](https://beej.us/guide/bgnet/html/index-wide.html)
-
 - [tcp(7) protocol manpage](https://man.archlinux.org/man/tcp.7)
 - [ip(7) protocol manpage](https://man.archlinux.org/man/ip.7)
 - [socket(7) protocol manpage](https://man.archlinux.org/man/tcp.7)
-
 - [socket(3p) POSIX manpage](https://man.archlinux.org/man/socket.3p)
 - [bind(3p) POSIX manpage](https://man.archlinux.org/man/bind.3p)
 - [accept(3p) POSIX manpage](https://man.archlinux.org/man/accept.3p)

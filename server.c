@@ -1,3 +1,4 @@
+#include "string_ops.h"
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -6,35 +7,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-const char* CRLF = "\r\n";
-const char* SP = " ";
-
-typedef struct {
-    const char* data;
-    size_t len;
-} string;
-
-bool string_equal(string* l, string* r) {
-    return l->len == r->len && memcmp(l->data, r->data, l->len) == 0;
-}
-
-string string_from_cstr(const char* str) {
-    string s;
-    s.len = strlen(str);
-    s.data = str;
-    return s;
-}
-
-void string_trim_spaces(string* s) {
-    /* left trim */
-    while (*s->data == ' ') {
-        s->data += 1;
-    }
-    /* right trim */
-    while (s->len > 0 && s->data[s->len-1] == ' ') {
-        s->len -= 1;
-    }
-}
+#define CRLF "\r\n"
+#define SP " "
 
 /* Request-Line = Method SP Request-URI SP HTTP-Version CRLF */
 typedef struct {

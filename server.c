@@ -17,72 +17,29 @@ typedef struct {
     string version;
 } http_req_line;
 
-typedef enum {
+typedef enum http_status {
     HTTP_RES_OK = 200,
     HTTP_RES_BAD_REQUEST = 400,
+    HTTP_RES_NOT_FOUND = 404,
     HTTP_RES_INTERNAL_SERVER_ERR = 500,
 } http_status;
 
-typedef struct {
-    const char* start;
-    size_t len;
-} string_view;
-
-typedef struct {
-    string_view* splits;
-    size_t count;
-    size_t capacity;
-} string_splits;
-
-static string_splits split_string(const char* str, size_t len, const char* split_by) {
-    string_splits result;
-    const char* start = str;
-    size_t result_i = 0;
-    size_t split_by_len = strlen(split_by);
-
-    result.capacity = 8;
-    result.splits = calloc(sizeof(string_view), result.capacity);
-    result.count = 0;
-
-    for (size_t i = 0; i < len; ++i) {
-        if (i + split_by_len < len && memcmp(&str[i], split_by, split_by_len) == 0) {
-            result.splits[result_i].start = start;
-            result.splits[result_i].len = &str[i] - start;
-            result.count += 1;
-            result_i += 1;
-            start = &str[i + split_by_len];
-            i += split_by_len;
-
-            if (result.count == result.capacity) {
-                result.capacity *= 2;
-                string_view* temp = realloc(result.splits, sizeof(string_view) * result.capacity);
-                if (temp) {
-                    result.splits = temp;
-                } else {
-                    perror("realloc()");
-                    abort();
-                }
-            }
-        }
-    }
-    /* we might miss the last one if the input string doesn't end with the delimiter */
-    size_t last_len = &str[len] - start;
-    if (last_len > 0) {
-        result.splits[result_i].start = start;
-        result.splits[result_i].len = last_len;
-        result.count += 1;
-    }
-    return result;
-}
-
-static void free_splits(string_splits* splits) {
-    if (splits) {
-        free(splits->splits);
-        splits->splits = NULL;
+const char* http_status_to_string(http_status status) {
+    switch (status) {
+    case HTTP_RES_OK:
+        return "OK";
+    case HTTP_RES_BAD_REQUEST:
+        return "Bad Request";
+    case HTTP_RES_INTERNAL_SERVER_ERR:
+        return "Internal Server Error";
+    case HTTP_RES_NOT_FOUND:
+        return "Not Found";
+    default:
+        return "Unknown";
     }
 }
 
-http_req_line http_req_line_init() {
+http_req_line http_req_line_init(void) {
     http_req_line line;
     memset(&line, 0, sizeof(line));
     return line;
@@ -111,11 +68,39 @@ http_status parse_req_line(http_req_line* req_line, const char* buf, size_t len)
     return HTTP_RES_OK;
 }
 
+string http_response_generate(char* buf, size_t buf_len, http_status status, size_t body_len) {
+    int n = 0;
+    string response;
+    response.len = 0;
+    memset(buf, 0, buf_len);
+
+    response.len += sprintf(buf, "%s %d %s" CRLF, "HTTP/1.0", status, http_status_to_string(status));
+    response.len += sprintf(buf + response.len, "Content-Length: %zu" CRLF, body_len);
+    response.len += sprintf(buf + response.len, CRLF);
+    response.data = buf;
+    return response;
+}
+
+bool http_send_response(int socket, string header, string body) {
+    ssize_t n = send(socket, header.data, header.len, MSG_MORE);
+    if (n < 0) {
+        perror("send()");
+        return false;
+    }
+    if (n == 0) {
+        fprintf(stderr, "send() returned 0\n");
+        return false;
+    }
+    n = send(socket, body.data, body.len, 0);
+    return true;
+}
+
 int handle_client(int client_socket) {
     ssize_t n = 0;
     char buf[1024];
-    const char* hello = "HTTP/1.0 200 OK\r\n\r\n<h1>Hello, World!</h1>";
-    const char* bye = "HTTP/1.0 200 OK\r\n\r\n<h1>Bye, World!</h1>";
+    string hello_body = string_from_cstr("<h1>Hello, World!</h1>");
+    string bye_body = string_from_cstr("<h1>Bye, World!</h1>");
+    string err_404 = string_from_cstr("<p>Error 404: Not Found</p><p><a href=\"/\">Back to home</a></p>");
 
     printf("\n---\n");
     for (;;) {
@@ -142,6 +127,7 @@ int handle_client(int client_socket) {
 
         http_req_line req_line = http_req_line_init();
         http_status result = parse_req_line(&req_line, lines.splits[0].start, lines.splits[0].len);
+        free_splits(&lines);
         if (result != HTTP_RES_OK) {
             /* TODO: Return correct error + error page */
             printf("ERROR: failed to parse request line\n");
@@ -152,15 +138,24 @@ int handle_client(int client_socket) {
         string route_bye = string_from_cstr("/bye");
 
         if (string_equal(&req_line.uri, &route_hello)) {
-            (void)write(client_socket, hello, strlen(hello));
+            if (!http_send_response(
+                client_socket,
+                http_response_generate(buf, sizeof(buf), HTTP_RES_OK, hello_body.len),
+                hello_body)) return -1;
         } else if (string_equal(&req_line.uri, &route_bye)) {
-            (void)write(client_socket, bye, strlen(bye));
+            if (!http_send_response(
+                client_socket,
+                http_response_generate(buf, sizeof(buf), HTTP_RES_OK, bye_body.len),
+                bye_body)) return -1;
         } else {
             printf("ERROR: unknown route: \"%.*s\"\n", (int)req_line.uri.len, req_line.uri.data);
+            (void)http_send_response(
+                client_socket,
+                http_response_generate(buf, sizeof(buf), HTTP_RES_NOT_FOUND, err_404.len),
+                err_404);
             return -1;
         }
 
-        free_splits(&lines);
         close(client_socket);
         break;
     }

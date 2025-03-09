@@ -169,6 +169,8 @@ int handle_client(int client_socket) {
     return 0;
 }
 
+const int PORT = 6969;
+
 int main(void) {
     /* declare */
     int rc = 0;
@@ -195,7 +197,7 @@ int main(void) {
     /* we dont really care if this fails */
     (void)setsockopt(tcp_socket, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
 
-    bind_addr.sin_port = htons(6969);
+    bind_addr.sin_port = htons(PORT);
     bind_addr.sin_family = AF_INET;
     bind_addr.sin_addr.s_addr = INADDR_ANY;
 
@@ -213,7 +215,7 @@ int main(void) {
         ret = 1;
         goto exit;
     }
-    printf("listen succeeded\n");
+    printf("listening on http://localhost:%d/\n", PORT);
 
     for (;;) {
         printf("waiting for connections...\n");

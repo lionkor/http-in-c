@@ -7,12 +7,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #define CRLF "\r\n"
 #define SP " "
+
+const string_view WEB_ROOT = STRING_VIEW_FROM_LITERAL("./www/");
 
 /* Request-Line = Method SP Request-URI SP HTTP-Version CRLF */
 typedef struct {
@@ -73,7 +76,6 @@ http_status parse_req_line(http_req_line* req_line, const char* buf, size_t len)
 }
 
 string_view http_response_generate(char* buf, size_t buf_len, http_status status, size_t body_len) {
-    int n = 0;
     string_view response;
     response.len = 0;
     memset(buf, 0, buf_len);
@@ -99,12 +101,80 @@ bool http_send_response(int socket, string_view header, string_view body) {
     return true;
 }
 
+static string_view err_404 = STRING_VIEW_FROM_LITERAL("<p>Error 404: Not Found</p><p><a href=\"/\">Back to home</a></p>");
+
+bool http_serve_file(int socket, string_view filename) {
+    char buf[64];
+    char filename_buf[PATH_MAX];
+    bool return_value = true;
+    int in_fd = -1;
+    ssize_t result = 0;
+    string_view header;
+    off_t sendfile_offset = 0;
+    size_t sent = 0;
+
+    /* TODO: if webroot + filename > path_max, error + return */
+    memset(filename_buf, 0, sizeof(filename_buf));
+    memcpy(filename_buf, WEB_ROOT.data, WEB_ROOT.len);
+    memcpy(filename_buf + WEB_ROOT.len - 1, filename.data, filename.len);
+
+    fs_metadata file_metadata = fs_get_metadata(string_view_from_cstr(filename_buf));
+    if (!file_metadata.exists) {
+        (void)http_send_response(
+            socket,
+            http_response_generate(buf, sizeof(buf), HTTP_RES_NOT_FOUND, err_404.len),
+            err_404);
+        return false;
+    }
+
+    header = http_response_generate(buf, sizeof(buf), HTTP_RES_OK, file_metadata.size);
+
+    ssize_t n = send(socket, header.data, header.len, MSG_MORE);
+    if (n < 0) {
+        perror("send()");
+        return_value = false;
+        goto cleanup;
+    }
+    if (n == 0) {
+        fprintf(stderr, "send() returned 0\n");
+        return_value = false;
+        goto cleanup;
+    }
+    in_fd = open(filename_buf, O_RDONLY);
+    if (in_fd < 0) {
+        (void)http_send_response(
+            socket,
+            http_response_generate(buf, sizeof(buf), HTTP_RES_NOT_FOUND, err_404.len),
+            err_404);
+        return_value = false;
+        goto cleanup;
+    }
+
+    /* use sendfile(2) to send the file without using any userspace memory */
+    while (sent < file_metadata.size) {
+        result = sendfile(socket, in_fd, &sendfile_offset, file_metadata.size);
+        if (result < 0) {
+            printf("ERROR: sendfile() failed for \"%s\": %s\n", filename_buf, strerror(errno));
+            (void)http_send_response(
+                socket,
+                http_response_generate(buf, sizeof(buf), HTTP_RES_INTERNAL_SERVER_ERR, err_404.len),
+                err_404);
+            return_value = false;
+            goto cleanup;
+        }
+        sent += result;
+    }
+
+cleanup:
+    if (in_fd != -1) {
+        close(in_fd);
+    }
+    return return_value;
+}
+
 int handle_client(int client_socket) {
     ssize_t n = 0;
     char buf[1024];
-    string_view hello_body = string_view_from_cstr("<h1>Hello, World!</h1>");
-    string_view bye_body = string_view_from_cstr("<h1>Bye, World!</h1>");
-    string_view err_404 = string_view_from_cstr("<p>Error 404: Not Found</p><p><a href=\"/\">Back to home</a></p>");
 
     printf("\n---\n");
     for (;;) {
@@ -138,21 +208,12 @@ int handle_client(int client_socket) {
             return -1;
         }
 
-        string_view route_hello = string_view_from_cstr("/hello");
-        string_view route_bye = string_view_from_cstr("/bye");
+        string_view route_root = string_view_from_cstr("/");
 
-        if (string_view_equal(&req_line.uri, &route_hello)) {
-            if (!http_send_response(
-                    client_socket,
-                    http_response_generate(buf, sizeof(buf), HTTP_RES_OK, hello_body.len),
-                    hello_body))
+        if (string_view_equal(&req_line.uri, &route_root)) {
+            if (!http_serve_file(client_socket, string_view_from_cstr("index.html"))) {
                 return -1;
-        } else if (string_view_equal(&req_line.uri, &route_bye)) {
-            if (!http_send_response(
-                    client_socket,
-                    http_response_generate(buf, sizeof(buf), HTTP_RES_OK, bye_body.len),
-                    bye_body))
-                return -1;
+            }
         } else {
             printf("ERROR: unknown route: \"%.*s\"\n", (int)req_line.uri.len, req_line.uri.data);
             (void)http_send_response(
@@ -181,9 +242,7 @@ int main(void) {
     int client_socket = 0;
     int enabled = true;
 
-    const char* web_root = "./www";
-
-    fs_metadata web_root_meta = fs_get_metadata(string_view_from_cstr(web_root));
+    fs_metadata web_root_meta = fs_get_metadata(WEB_ROOT);
     if (!web_root_meta.exists) {
         /*
             rwxr-xr-x
@@ -191,7 +250,8 @@ int main(void) {
                ^^^ group
             ^^^ me
         */
-        mkdir(web_root, S_IEXEC | S_IWRITE | S_IREAD | S_IRGRP | S_IXGRP | S_IXOTH | S_IROTH);
+        /* this is safe, because it's from a literal which is 0-terminated */
+        mkdir(WEB_ROOT.data, S_IEXEC | S_IWRITE | S_IREAD | S_IRGRP | S_IXGRP | S_IXOTH | S_IROTH);
     }
 
     /* initialize */

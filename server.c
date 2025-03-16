@@ -1,10 +1,14 @@
+#include "fs.h"
 #include "string_ops.h"
+#include <fcntl.h>
+#include <linux/limits.h>
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define CRLF "\r\n"
@@ -12,9 +16,9 @@
 
 /* Request-Line = Method SP Request-URI SP HTTP-Version CRLF */
 typedef struct {
-    string method;
-    string uri;
-    string version;
+    string_view method;
+    string_view uri;
+    string_view version;
 } http_req_line;
 
 typedef enum http_status {
@@ -57,20 +61,20 @@ http_status parse_req_line(http_req_line* req_line, const char* buf, size_t len)
         return HTTP_RES_BAD_REQUEST;
     }
 
-    req_line->method.data = components.splits[0].start;
+    req_line->method.data = components.splits[0].data;
     req_line->method.len = components.splits[0].len;
-    req_line->uri.data = components.splits[1].start;
+    req_line->uri.data = components.splits[1].data;
     req_line->uri.len = components.splits[1].len;
-    req_line->version.data = components.splits[2].start;
+    req_line->version.data = components.splits[2].data;
     req_line->version.len = components.splits[2].len;
 
     free_splits(&components);
     return HTTP_RES_OK;
 }
 
-string http_response_generate(char* buf, size_t buf_len, http_status status, size_t body_len) {
+string_view http_response_generate(char* buf, size_t buf_len, http_status status, size_t body_len) {
     int n = 0;
-    string response;
+    string_view response;
     response.len = 0;
     memset(buf, 0, buf_len);
 
@@ -81,7 +85,7 @@ string http_response_generate(char* buf, size_t buf_len, http_status status, siz
     return response;
 }
 
-bool http_send_response(int socket, string header, string body) {
+bool http_send_response(int socket, string_view header, string_view body) {
     ssize_t n = send(socket, header.data, header.len, MSG_MORE);
     if (n < 0) {
         perror("send()");
@@ -98,9 +102,9 @@ bool http_send_response(int socket, string header, string body) {
 int handle_client(int client_socket) {
     ssize_t n = 0;
     char buf[1024];
-    string hello_body = string_from_cstr("<h1>Hello, World!</h1>");
-    string bye_body = string_from_cstr("<h1>Bye, World!</h1>");
-    string err_404 = string_from_cstr("<p>Error 404: Not Found</p><p><a href=\"/\">Back to home</a></p>");
+    string_view hello_body = string_view_from_cstr("<h1>Hello, World!</h1>");
+    string_view bye_body = string_view_from_cstr("<h1>Bye, World!</h1>");
+    string_view err_404 = string_view_from_cstr("<p>Error 404: Not Found</p><p><a href=\"/\">Back to home</a></p>");
 
     printf("\n---\n");
     for (;;) {
@@ -126,7 +130,7 @@ int handle_client(int client_socket) {
         }
 
         http_req_line req_line = http_req_line_init();
-        http_status result = parse_req_line(&req_line, lines.splits[0].start, lines.splits[0].len);
+        http_status result = parse_req_line(&req_line, lines.splits[0].data, lines.splits[0].len);
         free_splits(&lines);
         if (result != HTTP_RES_OK) {
             /* TODO: Return correct error + error page */
@@ -134,19 +138,21 @@ int handle_client(int client_socket) {
             return -1;
         }
 
-        string route_hello = string_from_cstr("/hello");
-        string route_bye = string_from_cstr("/bye");
+        string_view route_hello = string_view_from_cstr("/hello");
+        string_view route_bye = string_view_from_cstr("/bye");
 
-        if (string_equal(&req_line.uri, &route_hello)) {
+        if (string_view_equal(&req_line.uri, &route_hello)) {
             if (!http_send_response(
-                client_socket,
-                http_response_generate(buf, sizeof(buf), HTTP_RES_OK, hello_body.len),
-                hello_body)) return -1;
-        } else if (string_equal(&req_line.uri, &route_bye)) {
+                    client_socket,
+                    http_response_generate(buf, sizeof(buf), HTTP_RES_OK, hello_body.len),
+                    hello_body))
+                return -1;
+        } else if (string_view_equal(&req_line.uri, &route_bye)) {
             if (!http_send_response(
-                client_socket,
-                http_response_generate(buf, sizeof(buf), HTTP_RES_OK, bye_body.len),
-                bye_body)) return -1;
+                    client_socket,
+                    http_response_generate(buf, sizeof(buf), HTTP_RES_OK, bye_body.len),
+                    bye_body))
+                return -1;
         } else {
             printf("ERROR: unknown route: \"%.*s\"\n", (int)req_line.uri.len, req_line.uri.data);
             (void)http_send_response(
@@ -174,6 +180,19 @@ int main(void) {
     int ret = 0;
     int client_socket = 0;
     int enabled = true;
+
+    const char* web_root = "./www";
+
+    fs_metadata web_root_meta = fs_get_metadata(string_view_from_cstr(web_root));
+    if (!web_root_meta.exists) {
+        /*
+            rwxr-xr-x
+                  ^^^ others
+               ^^^ group
+            ^^^ me
+        */
+        mkdir(web_root, S_IEXEC | S_IWRITE | S_IREAD | S_IRGRP | S_IXGRP | S_IXOTH | S_IROTH);
+    }
 
     /* initialize */
     memset(&bind_addr, 0, sizeof(bind_addr));

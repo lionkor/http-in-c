@@ -1,3 +1,5 @@
+#pragma once
+
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -5,36 +7,8 @@
 #include <string.h>
 #include <stdbool.h>
 
-/* TODO: This is the same as string_view :) */
 typedef struct {
     const char* data;
-    size_t len;
-} string;
-
-bool string_equal(string* l, string* r) {
-    return l->len == r->len && memcmp(l->data, r->data, l->len) == 0;
-}
-
-string string_from_cstr(const char* str) {
-    string s;
-    s.len = strlen(str);
-    s.data = str;
-    return s;
-}
-
-void string_trim_spaces(string* s) {
-    /* left trim */
-    while (*s->data == ' ') {
-        s->data += 1;
-    }
-    /* right trim */
-    while (s->len > 0 && s->data[s->len - 1] == ' ') {
-        s->len -= 1;
-    }
-}
-
-typedef struct {
-    const char* start;
     size_t len;
 } string_view;
 
@@ -56,7 +30,7 @@ static string_splits split_string(const char* str, size_t len, const char* split
 
     for (size_t i = 0; i < len; ++i) {
         if (i + split_by_len < len && memcmp(&str[i], split_by, split_by_len) == 0) {
-            result.splits[result_i].start = start;
+            result.splits[result_i].data = start;
             result.splits[result_i].len = &str[i] - start;
             result.count += 1;
             result_i += 1;
@@ -75,10 +49,10 @@ static string_splits split_string(const char* str, size_t len, const char* split
             }
         }
     }
-    /* we might miss the last one if the input string doesn't end with the delimiter */
+    /* we might miss the last one if the input string_view doesn't end with the delimiter */
     size_t last_len = &str[len] - start;
     if (last_len > 0) {
-        result.splits[result_i].start = start;
+        result.splits[result_i].data = start;
         result.splits[result_i].len = last_len;
         result.count += 1;
     }
@@ -89,5 +63,27 @@ static void free_splits(string_splits* splits) {
     if (splits) {
         free(splits->splits);
         splits->splits = NULL;
+    }
+}
+
+bool string_view_equal(string_view* l, string_view* r) {
+    return l->len == r->len && memcmp(l->data, r->data, l->len) == 0;
+}
+
+string_view string_view_from_cstr(const char* str) {
+    string_view s;
+    s.len = strlen(str);
+    s.data = str;
+    return s;
+}
+
+void string_view_trim_spaces(string_view* s) {
+    /* left trim */
+    while (*s->data == ' ') {
+        s->data += 1;
+    }
+    /* right trim */
+    while (s->len > 0 && s->data[s->len - 1] == ' ') {
+        s->len -= 1;
     }
 }

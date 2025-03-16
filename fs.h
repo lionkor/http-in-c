@@ -7,6 +7,7 @@
 
 typedef struct {
     bool exists;
+    size_t size;
 } fs_metadata;
 
 fs_metadata fs_get_metadata(string_view filename) {
@@ -22,6 +23,7 @@ fs_metadata fs_get_metadata(string_view filename) {
     if (stat(buf, &st) < 0) {
         return metadata;
     }
+    metadata.size = st.st_size;
     metadata.exists = true;
     return metadata;
 }

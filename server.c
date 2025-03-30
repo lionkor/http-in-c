@@ -1,5 +1,6 @@
 #include "fs.h"
 #include "string_ops.h"
+#include <signal.h>
 #include <fcntl.h>
 #include <linux/limits.h>
 #include <netinet/in.h>
@@ -11,6 +12,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define CRLF "\r\n"
 #define SP " "
@@ -80,7 +82,7 @@ string_view http_response_generate(char* buf, size_t buf_len, http_status status
     response.len = 0;
     memset(buf, 0, buf_len);
 
-    response.len += sprintf(buf, "%s %d %s" CRLF, "HTTP/1.0", status, http_status_to_string(status));
+    response.len += sprintf(buf, "%s %d %s" CRLF, "HTTP/1.1", status, http_status_to_string(status));
     response.len += sprintf(buf + response.len, "Content-Length: %zu" CRLF, body_len);
     response.len += sprintf(buf + response.len, CRLF);
     response.data = buf;
@@ -172,8 +174,10 @@ cleanup:
     return return_value;
 }
 
-int handle_client(int client_socket) {
+void* handle_client(void* client_socket_ptr) {
+    int client_socket = (int)client_socket_ptr;
     ssize_t n = 0;
+    int result = 0;
     char buf[1024];
 
     printf("\n---\n");
@@ -183,20 +187,22 @@ int handle_client(int client_socket) {
         n = read(client_socket, buf, sizeof(buf) - 1);
         if (n < 0) {
             perror("read(client)");
-            return -1;
+            result = -1;
+            break;
         }
         if (n == 0) {
             printf("connection closed gracefully!\n");
             break;
         }
 
-        printf("REQUEST:\n%s", buf);
+        //printf("REQUEST:\n%s", buf);
 
         string_splits lines = split_string(buf, n, CRLF);
 
         if (lines.count < 1) {
             printf("ERROR: empty request\n");
-            return -1;
+            result = -1;
+            break;
         }
 
         http_req_line req_line = http_req_line_init();
@@ -205,30 +211,30 @@ int handle_client(int client_socket) {
         if (result != HTTP_RES_OK) {
             /* TODO: Return correct error + error page */
             printf("ERROR: failed to parse request line\n");
-            return -1;
+            result = -1;
+            break;
         }
+
+        printf("REQUEST: %.*s %.*s\n", (int)req_line.method.len, req_line.method.data, (int)req_line.uri.len, req_line.uri.data);
 
         string_view route_root = string_view_from_cstr("/");
 
         if (string_view_equal(&req_line.uri, &route_root)) {
             if (!http_serve_file(client_socket, string_view_from_cstr("index.html"))) {
-                return -1;
+                result = -1;
+                break;
             }
         } else {
-            printf("ERROR: unknown route: \"%.*s\"\n", (int)req_line.uri.len, req_line.uri.data);
-            (void)http_send_response(
-                client_socket,
-                http_response_generate(buf, sizeof(buf), HTTP_RES_NOT_FOUND, err_404.len),
-                err_404);
-            return -1;
+            if (!http_serve_file(client_socket, req_line.uri)) {
+                result = -1;
+                break;
+            }
         }
-
-        close(client_socket);
-        break;
     }
-    printf("\n---\n");
+    printf("Closing connection with result %d\n", result);
+    close(client_socket);
 
-    return 0;
+    pthread_exit((void*)result);
 }
 
 const int PORT = 6969;
@@ -241,6 +247,10 @@ int main(void) {
     int ret = 0;
     int client_socket = 0;
     int enabled = true;
+    pthread_t* threads = NULL;
+    size_t threads_count = 0;
+    size_t threads_capacity = 10;
+    threads = calloc(threads_capacity, sizeof(pthread_t));
 
     fs_metadata web_root_meta = fs_get_metadata(WEB_ROOT);
     if (!web_root_meta.exists) {
@@ -296,11 +306,31 @@ int main(void) {
         client_socket = accept(tcp_socket, NULL, NULL);
 
         printf("got a connection!\n");
-        rc = handle_client(client_socket);
+        pthread_t thread;
+        rc = pthread_create(&thread, NULL, handle_client, (void*)client_socket);
+        if (rc != 0) {
+            perror("pthread_create()");
+            continue;
+        }
+        threads[threads_count] = thread;
+        ++threads_count;
+        // grow the vector if there is no space left
+        if (threads_count + 1 > threads_capacity) {
+            threads_capacity = threads_capacity * 1.5f;
+            pthread_t* new_threads = realloc(threads, threads_capacity * sizeof(pthread_t));
+            if (!new_threads) {
+                perror("realloc()");
+                goto exit;
+            }
+            threads = new_threads;
+        }
         /* ignore errors, dont care for now */
     }
 
 exit:
+    for (size_t i = 0; i < threads_count; ++i) {
+        pthread_kill(threads[i], SIGTERM);
+    }
     close(tcp_socket);
     return ret;
 }

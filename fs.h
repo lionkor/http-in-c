@@ -18,8 +18,8 @@ fs_metadata fs_get_metadata(string_view filename) {
     if (filename.len + 1 > PATH_MAX) {
         return metadata;
     }
-    memset(buf, 0, sizeof(buf));
     memcpy(buf, filename.data, filename.len);
+    buf[filename.len] = 0;
     if (stat(buf, &st) < 0) {
         return metadata;
     }

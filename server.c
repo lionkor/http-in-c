@@ -116,9 +116,9 @@ bool http_serve_file(int socket, string_view filename) {
     size_t sent = 0;
 
     /* TODO: if webroot + filename > path_max, error + return */
-    memset(filename_buf, 0, sizeof(filename_buf));
     memcpy(filename_buf, WEB_ROOT.data, WEB_ROOT.len);
     memcpy(filename_buf + WEB_ROOT.len - 1, filename.data, filename.len);
+    filename_buf[WEB_ROOT.len + filename.len - 1] = 0;
 
     fs_metadata file_metadata = fs_get_metadata(string_view_from_cstr(filename_buf));
     if (!file_metadata.exists) {
@@ -234,7 +234,7 @@ void* handle_client(void* client_socket_ptr) {
     printf("Closing connection with result %d\n", result);
     close(client_socket);
 
-    pthread_exit((void*)result);
+    return (void*)result;
 }
 
 const int PORT = 6969;
